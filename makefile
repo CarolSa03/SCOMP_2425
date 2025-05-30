@@ -12,7 +12,7 @@ HEADERS = include/simulation.h include/collision.h
 all: $(PARENT) $(DRONE)
 
 $(PARENT): $(PARENT_SRC) $(COLLISION_SRC) $(HEADERS)
-	$(CC) $(CFLAGS) -o $(PARENT) $(PARENT_SRC) $(COLLISION_SRC)
+	$(CC) $(CFLAGS) -o $(PARENT) $(PARENT_SRC) $(COLLISION_SRC) 
 
 $(DRONE): $(DRONE_SRC) $(HEADERS)
 	$(CC) $(CFLAGS) -o $(DRONE) $(DRONE_SRC)

@@ -19,19 +19,13 @@ void collision_handler()
   char msg[100];
   int len = sprintf(msg, "Drone PID %d: Collision detected! Handling SIGUSR1...\n", getpid());
   write(STDERR_FILENO, msg, len);
-
-  // sleep(1);
-  // handling_collision = 0;
 }
 
 void termination_handler(int signum)
 {
   if (signum == SIGINT || signum == SIGTERM)
   {
-    // char msg[] = "Drone: Received termination signal, cleaning up...\n";
-    // write(STDOUT_FILENO, msg, sizeof(msg) - 1);
     time_to_go = 1;
-    // exit(0);
   }
 }
 
@@ -72,7 +66,7 @@ int main()
   {
     if (handling_collision)
     {
-     // sleep(1);
+      // sleep(1);
       handling_collision = 0;
     }
 

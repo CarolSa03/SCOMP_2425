@@ -129,8 +129,6 @@ void check_collision(int time_step, int num_drones, Position **positions, int *c
       }
     }
 
-   // sleep(1);
-
     for (int i = 0; i < num_drones; i++)
     {
       if (kill(drones[i].pid, 0) == 0)

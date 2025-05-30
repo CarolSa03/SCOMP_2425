@@ -1,9 +1,9 @@
 #!/bin/bash
 
-STEPS=10
-N_DRONES=1
-DRONE_SIZE=10
-COLLISIONS=5
+STEPS=40
+N_DRONES=20
+DRONE_SIZE=1
+COLLISIONS=40
 
 mkdir -p data
 > data/info.csv
@@ -89,8 +89,7 @@ generate_oscillating_movement() {
     done
 }
 
-# Linear movement (drones 1-3)
-for ((i=1; i<=3; i++)); do
+for ((i=1; i<=6; i++)); do
     start_x=$((RANDOM % 50))
     start_y=$((RANDOM % 50))
     start_z=$((RANDOM % 10))
@@ -103,9 +102,8 @@ for ((i=1; i<=3; i++)); do
     generate_linear_movement $i $start_x $start_y $start_z $x_inc $y_inc $z_inc
 done
 
-# Circular movement (drones 4-6)
-for ((i=4; i<=6; i++)); do
-    if [ $i -eq 4 ]; then
+for ((i=7; i<=12; i++)); do
+    if [ $i -lt 9 ]; then
         center_x=25
         center_y=25
     else
@@ -118,9 +116,9 @@ for ((i=4; i<=6; i++)); do
     generate_circular_movement $i $center_x $center_y $z $radius $direction
 done
 
-# Spiral movement (drones 7-8)
-for ((i=7; i<=8; i++)); do
-    if [ $i -eq 7 ]; then
+# Spiral movement (drones 13-16)
+for ((i=13; i<=16; i++)); do
+    if [ $i -lt 15 ]; then
         center_x=50
         center_y=50
     else
@@ -133,9 +131,8 @@ for ((i=7; i<=8; i++)); do
     generate_spiral_movement $i $center_x $center_y $start_z $radius $z_inc
 done
 
-# Oscillating movement (drones 9-10)
-for ((i=9; i<=10; i++)); do
-    if [ $i -eq 9 ]; then
+for ((i=17; i<=20; i++)); do
+    if [ $i -lt 19 ]; then
         center_x=35
         center_y=35
     else
