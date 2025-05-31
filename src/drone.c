@@ -1,94 +1,135 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <signal.h>
-#include <sys/types.h>
-#include <sys/wait.h>
+#include "../include/simulation.h"
 
-volatile sig_atomic_t handling_collision = 0;
-volatile sig_atomic_t time_to_go = 0;
-
-void collision_handler()
+int main(int argc, char *argv[])
 {
-  if (handling_collision)
-    return;
+  char buffer[256];
 
-  handling_collision = 1;
-
-  char msg[100];
-  int len = sprintf(msg, "Drone PID %d: Collision detected! Handling SIGUSR1...\n", getpid());
-  write(STDERR_FILENO, msg, len);
-}
-
-void termination_handler(int signum)
-{
-  if (signum == SIGINT || signum == SIGTERM)
+  if (argc != 2)
   {
-    time_to_go = 1;
-  }
-}
-
-int main()
-{
-  struct sigaction sa_collision;
-  memset(&sa_collision, 0, sizeof(struct sigaction));
-  sa_collision.sa_handler = collision_handler;
-
-  if (sigfillset(&sa_collision.sa_mask) != 0)
-    perror("sigfillset");
-  sa_collision.sa_flags = 0;
-
-  sigaction(SIGUSR1, &sa_collision, NULL);
-
-  struct sigaction sa_term;
-  memset(&sa_term, 0, sizeof(struct sigaction));
-  sa_term.sa_handler = termination_handler;
-  sigemptyset(&sa_term.sa_mask);
-  sa_term.sa_flags = 0;
-
-  sigaction(SIGINT, &sa_term, NULL);
-  sigaction(SIGTERM, &sa_term, NULL);
-
-  char script_path[100];
-  FILE *script;
-  fgets(script_path, sizeof(script_path), stdin);
-  sscanf(script_path, "INIT %s", script_path);
-
-  if ((script = fopen(script_path, "r")) == NULL)
-  {
-    perror("fopen");
-    exit(EXIT_FAILURE);
+    snprintf(buffer, sizeof(buffer), "Usage: %s <drone_id>\n", argv[0]);
+    write(STDERR_FILENO, buffer, strlen(buffer));
+    exit(1);
   }
 
-  char line[256];
-  while (fgets(line, sizeof(line), script) != NULL)
+  int drone_id = atoi(argv[1]);
+
+  /* opens shared memory area */
+  int shm_fd = shm_open("/drone_sim", O_RDWR, 0);
+  if (shm_fd == -1)
   {
-    if (handling_collision)
+    perror("drone: shm_open");
+    exit(1);
+  }
+
+  /* maps shm into address space */
+  SharedMemory *shared_mem = mmap(NULL, sizeof(SharedMemory),
+                                  PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  if (shared_mem == MAP_FAILED)
+  {
+    perror("drone: mmap");
+    exit(2);
+  }
+
+  /* opens semaphores */
+  sem_t *step_sync_sem = sem_open("/step_sync", 0);
+  sem_t *shared_mem_mutex = sem_open("/shared_mutex", 0);
+  sem_t *drones_ready_sem = sem_open("/drones_ready", 0);
+
+  if (step_sync_sem == SEM_FAILED || shared_mem_mutex == SEM_FAILED ||
+      drones_ready_sem == SEM_FAILED)
+  {
+    perror("drone: sem_open");
+    exit(3);
+  }
+
+  char filename[256];
+  snprintf(filename, sizeof(filename), "data/drone%d_movement.csv", drone_id + 1);
+
+  FILE *movement_file = fopen(filename, "r");
+  Position movements[MAX_TIME_STEPS];
+  int loaded_steps = 0;
+
+  char line[512];
+  snprintf(buffer, sizeof(buffer), "Drone %d: Reading from %s\n", drone_id + 1, filename);
+  write(STDOUT_FILENO, buffer, strlen(buffer));
+
+  while (fgets(line, sizeof(line), movement_file) && loaded_steps < MAX_TIME_STEPS)
+  {
+    line[strcspn(line, "\n")] = 0;
+    if (strlen(line) == 0)
+      continue;
+
+    float x, y, z;
+    int parsed = sscanf(line, "%f,%f,%f", &x, &y, &z);
+    if (parsed == 3)
     {
-      // sleep(1);
-      handling_collision = 0;
+      movements[loaded_steps].x = x;
+      movements[loaded_steps].y = y;
+      movements[loaded_steps].z = z;
+      loaded_steps++;
     }
+  }
 
-    if (time_to_go)
+  fclose(movement_file);
+
+  if (loaded_steps == 0)
+  {
+    snprintf(buffer, sizeof(buffer),
+             "Drone %d: ERROR - No valid data found in %s\n", drone_id + 1, filename);
+    write(STDOUT_FILENO, buffer, strlen(buffer));
+    munmap(shared_mem, sizeof(SharedMemory));
+    close(shm_fd);
+    return 1;
+  }
+
+  snprintf(buffer, sizeof(buffer),
+           "Drone %d: Successfully loaded %d movement steps\n", drone_id + 1, loaded_steps);
+  write(STDOUT_FILENO, buffer, strlen(buffer));
+
+  /* main execution loop */
+  for (int t = 0; t < loaded_steps && shared_mem->simulation_active; t++)
+  {
+    sem_wait(shared_mem_mutex);
+    if (t < MAX_TIME_STEPS && drone_id < MAX_DRONES)
     {
+      shared_mem->drone_positions[drone_id][t] = movements[t];
+    }
+    sem_post(shared_mem_mutex);
+
+    /* signals readiness */
+    sem_post(drones_ready_sem);
+
+    /* waits for permission to proceed */
+    sem_wait(step_sync_sem);
+
+    if (!shared_mem->simulation_active)
+    {
+      snprintf(buffer, sizeof(buffer),
+               "Drone %d: Simulation ended early at step %d\n", drone_id + 1, t);
+      write(STDOUT_FILENO, buffer, strlen(buffer));
       break;
     }
+  }
 
-    line[strcspn(line, "\n")] = 0;
-    printf("%s", line);
-    fflush(stdout);
-    // sleep(1);
-  }
-  if (fclose(script) != 0)
+  /* signals that this drone has finished */
+  sem_wait(shared_mem_mutex);
+  shared_mem->drones_finished++;
+  snprintf(buffer, sizeof(buffer),
+           "Drone %d: Finished simulation - %d/%d drones finished\n",
+           drone_id + 1, shared_mem->drones_finished, shared_mem->num_drones);
+  write(STDOUT_FILENO, buffer, strlen(buffer));
+  sem_post(shared_mem_mutex);
+
+  /* continues signaling readiness until simulation ends */
+  while (shared_mem->simulation_active)
   {
-    perror("Error closing script.");
-    exit(EXIT_FAILURE);
+    sem_post(drones_ready_sem);
+    sem_wait(step_sync_sem);
   }
-  if (time_to_go)
-  {
-    char msg[] = "Drone: Received termination signal, cleaning up...\n";
-    write(STDOUT_FILENO, msg, sizeof(msg) - 1);
-  }
+
+  /* cleanup */
+  munmap(shared_mem, sizeof(SharedMemory));
+  close(shm_fd);
+
   return 0;
 }

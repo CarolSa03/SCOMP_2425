@@ -1,22 +1,23 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -Iinclude
+CFLAGS = -Wall -Wextra -g
+LIBS = -lrt -lpthread
 PARENT = parent
 DRONE = drone
-COLLISION = collision
 
 PARENT_SRC = src/main.c
 DRONE_SRC = src/drone.c
-COLLISION_SRC = src/collision.c
-HEADERS = include/simulation.h include/collision.h
+HEADERS = include/simulation.h
 
 all: $(PARENT) $(DRONE)
 
-$(PARENT): $(PARENT_SRC) $(COLLISION_SRC) $(HEADERS)
-	$(CC) $(CFLAGS) -o $(PARENT) $(PARENT_SRC) $(COLLISION_SRC) 
+$(PARENT): $(PARENT_SRC) $(HEADERS)
+	$(CC) $(CFLAGS) -o $(PARENT) $(PARENT_SRC) $(LIBS)
 
 $(DRONE): $(DRONE_SRC) $(HEADERS)
-	$(CC) $(CFLAGS) -o $(DRONE) $(DRONE_SRC)
+	$(CC) $(CFLAGS) -o $(DRONE) $(DRONE_SRC) $(LIBS)
 
 clean:
-	rm -f $(PARENT) $(DRONE)
+	rm -f $(PARENT) $(DRONE) simulation_report.txt
+	rm -f /dev/shm/drone_sim /dev/shm/step_sync /dev/shm/shared_mutex /dev/shm/drones_ready
 
+.PHONY: all clean
