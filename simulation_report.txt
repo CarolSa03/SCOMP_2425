@@ -1,0 +1,18 @@
+DRONE SIMULATION REPORT
+========================
+
+Total drones: 5
+Total collisions: 0
+Max allowed collisions: 40
+Time steps completed: 40
+
+Drone Execution SStatus:
+Drone 1: FINISHED
+Drone 2: FINISHED
+Drone 3: FINISHED
+Drone 4: FINISHED
+Drone 5: FINISHED
+
+COMPLETED SUCCESSFULLY. NO COLLISIONS.
+
+THE FIGURE PASSED

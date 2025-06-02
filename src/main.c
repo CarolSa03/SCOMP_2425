@@ -125,7 +125,13 @@ void generate_final_report()
   fprintf(report_file, "Total collisions: %d\n", shared_mem->total_collisions);
   fprintf(report_file, "Max allowed collisions: %d\n", shared_mem->max_collisions);
   fprintf(report_file, "Time steps completed: %d\n\n", shared_mem->current_time_step + 1);
-
+  fprintf(report_file,"Drone Execution SStatus:\n");
+  for (int i = 0; i<shared_mem->num_drones; i++){
+    int finished = (i<shared_mem->drones_finished);
+    fprintf(report_file, "Drone %d: %s\n", i + 1, finished ? "FINISHED" : "NOT FINISHED");
+  }
+  fprintf(report_file, "\n");
+  
   if (shared_mem->collision_count > 0)
   {
     fprintf(report_file, "Collision Details:\n");
