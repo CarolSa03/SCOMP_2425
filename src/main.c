@@ -1,409 +1,406 @@
-/**
- * Author: Carolina Sá, Nilsa Gil, Diogo
- * Created: May 2025
- **/
+#include "../includes/simulation.h"
+#include <time.h>
+#include <math.h>
 
-#include "../include/simulation.h"
-
-SharedMemory *shared_mem;
-sem_t *step_sync_sem;
-sem_t *shared_mem_mutex;
-sem_t *drones_ready_sem;
-pthread_mutex_t report_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t collision_cond = PTHREAD_COND_INITIALIZER;
-int simulation_running = 1;
-
-Drone calculate_position(Position pos, int drone_size)
-{
-  Drone drone;
-  float half = (float)drone_size / 2.0f;
-
-  drone.minX = pos.x - half;
-  drone.maxX = pos.x + half;
-  drone.minY = pos.y - half;
-  drone.maxY = pos.y + half;
-  drone.minZ = pos.z - half;
-  drone.maxZ = pos.z + half;
-
-  return drone;
-}
-
-int intersect(Drone a, Drone b)
-{
-  return (a.minX <= b.maxX &&
-          a.maxX >= b.minX &&
-          a.minY <= b.maxY &&
-          a.maxY >= b.minY &&
-          a.minZ <= b.maxZ &&
-          a.maxZ >= b.minZ);
-}
-
-void *collision_detection_thread(void *arg)
-{
-  char buffer[256];
-
-  while (simulation_running && shared_mem->simulation_active)
-  {
-    sem_wait(shared_mem_mutex);
-    int current_step = shared_mem->current_time_step;
-    int num_drones = shared_mem->num_drones;
-    int drone_size = shared_mem->drone_size;
-
-    if (current_step >= 0 && current_step < shared_mem->time_steps)
-    {
-      for (int i = 0; i < num_drones - 1; i++)
-      {
-        for (int j = i + 1; j < num_drones; j++)
-        {
-          Position pos1 = shared_mem->drone_positions[i][current_step];
-          Position pos2 = shared_mem->drone_positions[j][current_step];
-
-          if ((pos1.x == 0.0f && pos1.y == 0.0f && pos1.z == 0.0f) ||
-              (pos2.x == 0.0f && pos2.y == 0.0f && pos2.z == 0.0f))
-          {
-            continue;
-          }
-
-          Drone drone_a = calculate_position(pos1, drone_size);
-          Drone drone_b = calculate_position(pos2, drone_size);
-
-          if (intersect(drone_a, drone_b))
-          {
-            if (shared_mem->collision_count < MAX_COLLISIONS)
-            {
-              shared_mem->collision_log[shared_mem->collision_count].time_step = current_step;
-              shared_mem->collision_log[shared_mem->collision_count].drone1 = i + 1;
-              shared_mem->collision_log[shared_mem->collision_count].drone2 = j + 1;
-              shared_mem->collision_log[shared_mem->collision_count].position1 = pos1;
-              shared_mem->collision_log[shared_mem->collision_count].position2 = pos2;
-              shared_mem->collision_count++;
-            }
-
-            shared_mem->total_collisions++;
-            shared_mem->collision_detected = 1;
-
-            snprintf(buffer, sizeof(buffer),
-                     "COLLISION DETECTED: Drones %d and %d at time step %d\n",
-                     i + 1, j + 1, current_step + 1);
-            write(STDOUT_FILENO, buffer, strlen(buffer));
-
-            pthread_mutex_lock(&report_mutex);
-            pthread_cond_signal(&collision_cond);
-            pthread_mutex_unlock(&report_mutex);
-
-            if (shared_mem->total_collisions >= shared_mem->max_collisions)
-            {
-              snprintf(buffer, sizeof(buffer),
-                       "COLLISION THRESHOLD EXCEEDED - Stopping simulation\n");
-              write(STDOUT_FILENO, buffer, strlen(buffer));
-              shared_mem->simulation_active = 0;
-              simulation_running = 0;
-            }
-          }
-        }
-      }
-    }
-
-    sem_post(shared_mem_mutex);
-  }
-
-  return NULL;
-}
-
-void generate_final_report()
-{
-  FILE *report_file = fopen("simulation_report.txt", "w");
-  if (!report_file)
-  {
-    perror("fopen");
-    return;
-  }
-
-  fprintf(report_file, "DRONE SIMULATION REPORT\n");
-  fprintf(report_file, "========================\n\n");
-  fprintf(report_file, "Total drones: %d\n", shared_mem->num_drones);
-  fprintf(report_file, "Total collisions: %d\n", shared_mem->total_collisions);
-  fprintf(report_file, "Max allowed collisions: %d\n", shared_mem->max_collisions);
-  fprintf(report_file, "Time steps completed: %d\n\n", shared_mem->current_time_step + 1);
-  fprintf(report_file,"Drone Execution SStatus:\n");
-  for (int i = 0; i<shared_mem->num_drones; i++){
-    int finished = (i<shared_mem->drones_finished);
-    fprintf(report_file, "Drone %d: %s\n", i + 1, finished ? "FINISHED" : "NOT FINISHED");
-  }
-  fprintf(report_file, "\n");
-  
-  if (shared_mem->collision_count > 0)
-  {
-    fprintf(report_file, "Collision Details:\n");
-    for (int i = 0; i < shared_mem->collision_count; i++)
-    {
-      Collision c = shared_mem->collision_log[i];
-      fprintf(report_file,
-              "Time step %d: Collision between Drone %d and Drone %d at position (%.2f,%.2f,%.2f) and (%.2f,%.2f,%.2f), respectively.\n",
-              c.time_step + 1, c.drone1, c.drone2,
-              c.position1.x, c.position1.y, c.position1.z,
-              c.position2.x, c.position2.y, c.position2.z);
-    }
-  }
-  else
-  {
-    fprintf(report_file, "COMPLETED SUCCESSFULLY. NO COLLISIONS.\n");
-  }
-
-  if (shared_mem->collision_count > 0)
-  {
-    fprintf(report_file,
-            (shared_mem->total_collisions < shared_mem->max_collisions) ? "\nINVOLVED IN COLLISIONS." : "\nTERMINATED DUE TO EXCESSIVE COLLISIONS.");
-  }
-
-  fprintf(report_file,
-          (shared_mem->total_collisions < shared_mem->max_collisions) ? "\nTHE FIGURE PASSED" : "\nTHE FIGURE FAILED");
-
-  fclose(report_file);
-
-  char buffer[100];
-  snprintf(buffer, sizeof(buffer), "Simulation report generated: simulation_report.txt\n");
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-}
-
-void *report_thread_function(void *arg)
-{
-  int last_reported_collisions = 0;
-  char buffer[256];
-
-  while (simulation_running)
-  {
-    pthread_mutex_lock(&report_mutex);
-    pthread_cond_wait(&collision_cond, &report_mutex);
-    pthread_mutex_unlock(&report_mutex);
-
-    if (!simulation_running || !shared_mem->simulation_active)
-    {
-      break;
-    }
-
-    sem_wait(shared_mem_mutex);
-    int current_collisions = shared_mem->total_collisions;
-    int current_step = shared_mem->current_time_step;
-    sem_post(shared_mem_mutex);
-
-    if (current_collisions > last_reported_collisions)
-    {
-      snprintf(buffer, sizeof(buffer),
-               "REPORT: %d collisions detected at step %d\n",
-               current_collisions, current_step + 1);
-      write(STDOUT_FILENO, buffer, strlen(buffer));
-      last_reported_collisions = current_collisions;
-    }
-  }
-
-  generate_final_report();
-  return NULL;
-}
-
-void load_config()
-{
-  FILE *config_file = fopen("data/info.csv", "r");
-  if (!config_file)
-  {
-    shared_mem->num_drones = 2;
-    shared_mem->drone_size = 4;
-    shared_mem->max_collisions = 5;
-    shared_mem->time_steps = 20;
-
-    char buffer[50];
-    snprintf(buffer, sizeof(buffer), "Using default configuration\n");
-    write(STDOUT_FILENO, buffer, strlen(buffer));
-    return;
-  }
-
-  char line[256];
-  if (fgets(line, sizeof(line), config_file))
-  {
-    if (sscanf(line, "%d,%d,%d,%d",
-               &shared_mem->num_drones,
-               &shared_mem->drone_size,
-               &shared_mem->max_collisions,
-               &shared_mem->time_steps) != 4)
-    {
-
-      char buffer[60];
-      snprintf(buffer, sizeof(buffer), "Error parsing config file, using defaults\n");
-      write(STDOUT_FILENO, buffer, strlen(buffer));
-
-      shared_mem->num_drones = 2;
-      shared_mem->drone_size = 4;
-      shared_mem->max_collisions = 5;
-      shared_mem->time_steps = 20;
-    }
-  }
-
-  fclose(config_file);
-}
+/* Global variables for resource cleanup - following teacher's pattern */
+int fd_shm;
+SharedMemory *shm;
+sem_t *sem_step_ready;
+sem_t *sem_step_continue;
+pthread_t collision_thread;
+pthread_t report_thread;
+pthread_mutex_t step_mutex;
+pthread_cond_t step_cond;
+pthread_mutex_t collision_mutex;
+pthread_cond_t collision_cond;
 
 int main()
 {
-  char buffer[256];
+    pid_t drone_pids[MAX_DRONES];
+    int i, data_size;
 
-  /* creates/opens shared memory area */
-  int shm_fd = shm_open("/drone_sim", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
-  if (shm_fd == -1)
-  {
-    perror("shm_open");
-    exit(1);
-  }
+    printf("=== Enhanced Drone Simulation System ===\n");
+    printf("Loading configuration from CSV files...\n");
 
-  /* defines size of shm */
-  if (ftruncate(shm_fd, sizeof(SharedMemory)) == -1)
-  {
-    perror("ftruncate");
-    exit(2);
-  }
-
-  /* maps shm into address space */
-  shared_mem = mmap(NULL, sizeof(SharedMemory),
-                    PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-  if (shared_mem == MAP_FAILED)
-  {
-    perror("mmap");
-    exit(3);
-  }
-
-  /* creates semaphores */
-  step_sync_sem = sem_open("/step_sync", O_CREAT, 0644, 0);
-  shared_mem_mutex = sem_open("/shared_mutex", O_CREAT, 0644, 1);
-  drones_ready_sem = sem_open("/drones_ready", O_CREAT, 0644, 0);
-
-  if (step_sync_sem == SEM_FAILED || shared_mem_mutex == SEM_FAILED ||
-      drones_ready_sem == SEM_FAILED)
-  {
-    perror("sem_open");
-    exit(4);
-  }
-
-  /* initializes shared memory */
-  memset(shared_mem, 0, sizeof(SharedMemory));
-  shared_mem->simulation_active = 1;
-  load_config();
-
-  snprintf(buffer, sizeof(buffer), "Configuration:\n");
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-  snprintf(buffer, sizeof(buffer), "Number of drones: %d\n", shared_mem->num_drones);
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-  snprintf(buffer, sizeof(buffer), "Drone size: %d\n", shared_mem->drone_size);
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-  snprintf(buffer, sizeof(buffer), "Max collisions: %d\n", shared_mem->max_collisions);
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-  snprintf(buffer, sizeof(buffer), "Time steps: %d\n", shared_mem->time_steps);
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-
-  /* creates threads */
-  pthread_t collision_thread, report_thread;
-  pthread_create(&collision_thread, NULL, collision_detection_thread, NULL);
-  pthread_create(&report_thread, NULL, report_thread_function, NULL);
-
-  /* creates drone processes */
-  pid_t drone_pids[MAX_DRONES];
-  for (int i = 0; i < shared_mem->num_drones; i++)
-  {
-    drone_pids[i] = fork();
-    if (drone_pids[i] == 0)
+    /* US361: create shared memory */
+    data_size = sizeof(SharedMemory);
+    if ((fd_shm = shm_open("/drone_sim", O_CREAT | O_EXCL | O_RDWR,
+                           S_IRUSR | S_IWUSR)) == -1)
     {
-      char drone_id[10];
-      snprintf(drone_id, sizeof(drone_id), "%d", i);
-      execl("./drone", "./drone", drone_id, NULL);
-      perror("execl");
-      exit(1);
-    }
-  }
-
-  /* main simulation loop */
-  for (int t = 0; t < shared_mem->time_steps && shared_mem->simulation_active; t++)
-  {
-    snprintf(buffer, sizeof(buffer), "Starting time step %d\n", t);
-    write(STDOUT_FILENO, buffer, strlen(buffer));
-
-    /* waits for all drones to be ready */
-    for (int i = 0; i < shared_mem->num_drones; i++)
-    {
-      sem_wait(drones_ready_sem);
+        perror("shm_open");
+        exit(3);
     }
 
-    /* updates current time step */
-    sem_wait(shared_mem_mutex);
-    shared_mem->current_time_step = t;
-    int finished_drones = shared_mem->drones_finished;
-    sem_post(shared_mem_mutex);
-
-    if (finished_drones >= shared_mem->num_drones)
+    if (ftruncate(fd_shm, data_size) == -1)
     {
-      snprintf(buffer, sizeof(buffer), "All drones finished at time step %d\n", t);
-      write(STDOUT_FILENO, buffer, strlen(buffer));
-      break;
+        perror("ftruncate");
+        exit(4);
     }
 
-    /* signals drones to proceed */
-    for (int i = 0; i < shared_mem->num_drones; i++)
+    if ((shm = (SharedMemory *)mmap(NULL, data_size, PROT_READ | PROT_WRITE,
+                                    MAP_SHARED, fd_shm, 0)) == MAP_FAILED)
     {
-      sem_post(step_sync_sem);
+        perror("mmap");
+        exit(5);
     }
 
-    /* checks collision threshold */
-    sem_wait(shared_mem_mutex);
-    int current_collisions = shared_mem->total_collisions;
-    int max_allowed = shared_mem->max_collisions;
-    sem_post(shared_mem_mutex);
+    initialize_simulation(shm);
+    printf("Simulation configured:\n");
+    printf("- Drones: %d\n", shm->num_drones);
+    printf("- Drone size: %d\n", shm->drone_size);
+    printf("- Max collisions: %d\n", shm->max_collisions);
+    printf("- Time steps: %d\n", shm->time_steps);
 
-    snprintf(buffer, sizeof(buffer),
-             "Time step %d completed - Collisions: %d/%d, Finished drones: %d/%d\n",
-             t, current_collisions, max_allowed, finished_drones, shared_mem->num_drones);
-    write(STDOUT_FILENO, buffer, strlen(buffer));
-
-    if (current_collisions >= max_allowed)
+    /* create semaphores for process synchronization */
+    if ((sem_step_ready = sem_open("/sem_step_ready", O_CREAT | O_EXCL, 0644, 0)) == SEM_FAILED)
     {
-      snprintf(buffer, sizeof(buffer), "SIMULATION TERMINATED: Maximum collisions reached\n");
-      write(STDOUT_FILENO, buffer, strlen(buffer));
-      break;
+        perror("sem_open step_ready");
+        exit(6);
     }
-  }
 
-  /* signals end of simulation */
-  sem_wait(shared_mem_mutex);
-  shared_mem->simulation_active = 0;
-  sem_post(shared_mem_mutex);
+    if ((sem_step_continue = sem_open("/sem_step_continue", O_CREAT | O_EXCL, 0644, 0)) == SEM_FAILED)
+    {
+        perror("sem_open step_continue");
+        exit(7);
+    }
 
-  /* wakes up report thread */
-  pthread_mutex_lock(&report_mutex);
-  simulation_running = 0;
-  pthread_cond_signal(&collision_cond);
-  pthread_mutex_unlock(&report_mutex);
+    /* mutexes and condition variables */
+    if (pthread_mutex_init(&step_mutex, NULL) != 0)
+    {
+        perror("pthread_mutex_init step");
+        exit(8);
+    }
 
-  /* signals remaining drones */
-  for (int i = 0; i < shared_mem->num_drones; i++)
-  {
-    sem_post(step_sync_sem);
-  }
+    if (pthread_cond_init(&step_cond, NULL) != 0)
+    {
+        perror("pthread_cond_init step");
+        exit(9);
+    }
 
-  /* waits for all child processes */
-  for (int i = 0; i < shared_mem->num_drones; i++)
-  {
-    waitpid(drone_pids[i], NULL, 0);
-  }
+    if (pthread_mutex_init(&collision_mutex, NULL) != 0)
+    {
+        perror("pthread_mutex_init collision");
+        exit(10);
+    }
 
-  /* waits for threads */
-  pthread_join(collision_thread, NULL);
-  pthread_join(report_thread, NULL);
+    if (pthread_cond_init(&collision_cond, NULL) != 0)
+    {
+        perror("pthread_cond_init collision");
+        exit(11);
+    }
 
-  snprintf(buffer, sizeof(buffer), "Simulation completed successfully\n");
-  write(STDOUT_FILENO, buffer, strlen(buffer));
+    if (pthread_create(&collision_thread, NULL, collision_detection_thread, shm) != 0)
+    {
+        perror("pthread_create collision");
+        exit(12);
+    }
 
-  /* cleanup */
-  munmap(shared_mem, sizeof(SharedMemory));
-  close(shm_fd);
-  shm_unlink("/drone_sim");
-  sem_unlink("/step_sync");
-  sem_unlink("/shared_mutex");
-  sem_unlink("/drones_ready");
+    if (pthread_create(&report_thread, NULL, report_generation_thread, shm) != 0)
+    {
+        perror("pthread_create report");
+        exit(13);
+    }
 
-  return 0;
+    /* Create drone processes */
+    for (i = 0; i < shm->num_drones; i++)
+    {
+        drone_pids[i] = fork();
+        if (drone_pids[i] == 0)
+        {
+            drone_process(i);
+            exit(0);
+        }
+        else if (drone_pids[i] < 0)
+        {
+            perror("fork");
+            exit(14);
+        }
+    }
+
+    printf("All %d drones launched. Starting simulation...\n", shm->num_drones);
+
+    /* US364 */
+    while (shm->current_timestep < shm->time_steps && !shm->simulation_finished)
+    {
+        /* wait for all active drones to be ready */
+        int active_drones = 0;
+        for (i = 0; i < shm->num_drones; i++)
+        {
+            if (shm->drones[i].active)
+            {
+                active_drones++;
+            }
+        }
+
+        /* Block until a drone signals ready */
+        for (i = 0; i < active_drones; i++)
+        {
+            sem_wait(sem_step_ready);
+        }
+
+        /* alll drones ready  */
+        shm->current_timestep++;
+
+        /* signal collision detection thread */
+        pthread_mutex_lock(&step_mutex);
+        shm->timestep_ready_for_collision = 1;
+        pthread_cond_signal(&step_cond);
+        pthread_mutex_unlock(&step_mutex);
+
+        /* wait for collision detection to complete */
+        pthread_mutex_lock(&step_mutex);
+        while (!shm->collision_detection_complete && !shm->simulation_finished)
+        {
+            pthread_cond_wait(&step_cond, &step_mutex);
+        }
+        shm->collision_detection_complete = 0;
+        shm->timestep_ready_for_collision = 0;
+        pthread_mutex_unlock(&step_mutex);
+
+        /* signal all drones to continue */
+        for (i = 0; i < active_drones; i++)
+        {
+            sem_post(sem_step_continue); /* unblock waiting drones */
+        }
+
+        /* clear collision tracking matrix AFTER drones have moved !! */
+        for (int x = 0; x < MAX_DRONES; x++)
+        {
+            for (int y = 0; y < MAX_DRONES; y++)
+            {
+                shm->collision_detected_this_timestep[x][y] = 0;
+            }
+        }
+
+        /* update active drone count */
+        shm->active_drone_count = 0;
+        for (i = 0; i < shm->num_drones; i++)
+        {
+            if (shm->drones[i].active)
+            {
+                shm->active_drone_count++;
+            }
+        }
+
+        printf("Timestep %d/%d (Active drones: %d, Collisions: %d)\n",
+               shm->current_timestep, shm->time_steps,
+               shm->active_drone_count, shm->collision_count);
+
+        /* check if collision threshold exceeded */
+        if (shm->collision_count >= shm->max_collisions)
+        {
+            printf("SIMULATION TERMINATED: Collision threshold exceeded (%d >= %d)\n",
+                   shm->collision_count, shm->max_collisions);
+            shm->simulation_finished = 1;
+            break;
+        }
+
+        /* check if all drones completed their missions */
+        if (shm->active_drone_count == 0)
+        {
+            printf("SIMULATION COMPLETED: All drones completed their missions\n");
+            shm->simulation_finished = 1;
+            break;
+        }
+    }
+
+    /* signal simulation end */
+    shm->simulation_finished = 1;
+
+    /* US363: Notify all waiting threads */
+    pthread_mutex_lock(&collision_mutex);
+    pthread_cond_broadcast(&collision_cond);
+    pthread_mutex_unlock(&collision_mutex);
+
+    pthread_mutex_lock(&step_mutex);
+    pthread_cond_broadcast(&step_cond);
+    pthread_mutex_unlock(&step_mutex);
+
+    printf("Simulation finished. Waiting for drones to terminate...\n");
+
+    /* wake up any remaining drone processes */
+    for (i = 0; i < shm->num_drones; i++)
+    {
+        sem_post(sem_step_continue);
+    }
+
+    /* wait for all drone processes */
+    for (i = 0; i < shm->num_drones; i++)
+    {
+        wait(NULL);
+    }
+
+    /* wait for threads to finish */
+    pthread_join(collision_thread, NULL);
+    pthread_join(report_thread, NULL);
+
+    print_simulation_status(shm);
+    printf("All processes terminated. Cleaning up...\n");
+    cleanup_resources();
+    printf("Enhanced simulation completed successfully.\n");
+    return 0;
+}
+
+void load_config(SharedMemory *shm)
+{
+    FILE *config = fopen(CONFIG_PATH, "r");
+    if (config)
+    {
+        if (fscanf(config, "%d,%d,%d,%d",
+                   &shm->num_drones, &shm->drone_size,
+                   &shm->max_collisions, &shm->time_steps) != 4)
+        {
+            printf("Warning: Invalid config format, using defaults\n");
+            goto use_defaults;
+        }
+        fclose(config);
+
+        /* Validate configuration values */
+        if (shm->num_drones <= 0 || shm->num_drones > MAX_DRONES)
+        {
+            printf("Warning: Invalid drone count, using default\n");
+            shm->num_drones = 10;
+        }
+        if (shm->drone_size <= 0)
+        {
+            shm->drone_size = DEFAULT_DRONE_SIZE;
+        }
+        if (shm->time_steps <= 0 || shm->time_steps > MAX_TIMESTEPS)
+        {
+            shm->time_steps = 50;
+        }
+        printf("Configuration loaded from %s\n", CONFIG_PATH);
+    }
+    else
+    {
+    use_defaults:
+        shm->num_drones = 10;
+        shm->drone_size = DEFAULT_DRONE_SIZE;
+        shm->max_collisions = 5;
+        shm->time_steps = 50;
+        printf("Using default configuration\n");
+    }
+}
+
+void load_drone_trajectory(int drone_id, SharedMemory *shm)
+{
+    char filename[100];
+    snprintf(filename, sizeof(filename), TRAJECTORY_PATH_FORMAT, drone_id + 1);
+    FILE *fp = fopen(filename, "r");
+
+    if (fp)
+    {
+        for (int step = 0; step < shm->time_steps; step++)
+        {
+            if (fscanf(fp, "%f,%f,%f",
+                       &shm->drones[drone_id].trajectory[step].x,
+                       &shm->drones[drone_id].trajectory[step].y,
+                       &shm->drones[drone_id].trajectory[step].z) != 3)
+            {
+                /* If we can't read more data, mark remaining positions as invalid */
+                for (int remaining = step; remaining < shm->time_steps; remaining++)
+                {
+                    shm->drones[drone_id].trajectory[remaining].x = 0.0f;
+                    shm->drones[drone_id].trajectory[remaining].y = 0.0f;
+                    shm->drones[drone_id].trajectory[remaining].z = 0.0f;
+                }
+                break;
+            }
+        }
+        fclose(fp);
+        printf("Loaded trajectory for drone %d from %s\n", drone_id + 1, filename);
+    }
+    else
+    {
+        printf("Warning: Could not load trajectory for drone %d, using default\n", drone_id + 1);
+        for (int step = 0; step < shm->time_steps; step++)
+        {
+            shm->drones[drone_id].trajectory[step].x = drone_id * 10.0f + step;
+            shm->drones[drone_id].trajectory[step].y = drone_id * 10.0f;
+            shm->drones[drone_id].trajectory[step].z = 100.0f;
+        }
+    }
+}
+
+void initialize_simulation(SharedMemory *shm)
+{
+    load_config(shm);
+
+    /* initialize simulation state */
+    shm->current_timestep = 0;
+    shm->collision_count = 0;
+    shm->simulation_finished = 0;
+    shm->collision_detected = 0;
+    shm->report_ready = 0;
+    shm->active_drone_count = shm->num_drones;
+    shm->timestep_ready_for_collision = 0;
+    shm->collision_detection_complete = 0;
+
+    /* tracking matrix */
+    for (int i = 0; i < MAX_DRONES; i++)
+    {
+        for (int j = 0; j < MAX_DRONES; j++)
+        {
+            shm->collision_detected_this_timestep[i][j] = 0;
+        }
+    }
+
+    /* starting drones */
+    for (int i = 0; i < shm->num_drones; i++)
+    {
+        shm->drones[i].active = 1;
+        shm->drones[i].drone_id = i;
+        shm->step_ready[i] = 0;
+        load_drone_trajectory(i, shm);
+
+        shm->drones[i].current_pos = shm->drones[i].trajectory[0];
+
+        shm->drones[i].bounding_box = calculate_bounding_box(
+            shm->drones[i].current_pos, shm->drone_size);
+    }
+}
+
+void print_simulation_status(SharedMemory *shm)
+{
+    printf("\nSIMULATION SUMMARY\n");
+    printf("Result: %s\n",
+           (shm->collision_count >= shm->max_collisions) ? "FAILED" : "PASSED");
+}
+
+/* cleanup function */
+void cleanup_resources(void)
+{
+    /* desstroy mutexes and condition variables */
+    pthread_mutex_destroy(&step_mutex);
+    pthread_cond_destroy(&step_cond);
+    pthread_mutex_destroy(&collision_mutex);
+    pthread_cond_destroy(&collision_cond);
+
+    /* unmap shared memory */
+    if (munmap(shm, sizeof(SharedMemory)) == -1)
+    {
+        perror("munmap");
+    }
+
+    /* closee file descriptor */
+    if (close(fd_shm) == -1)
+    {
+        perror("close");
+    }
+
+    /* removing shared memory and semaphores */
+    if (shm_unlink("/drone_sim") == -1)
+    {
+        perror("shm_unlink");
+    }
+
+    if (sem_unlink("/sem_step_ready") == -1)
+    {
+        perror("sem_unlink step_ready");
+    }
+
+    if (sem_unlink("/sem_step_continue") == -1)
+    {
+        perror("sem_unlink step_continue");
+    }
 }

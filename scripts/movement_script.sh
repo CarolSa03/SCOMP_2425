@@ -1,8 +1,8 @@
 #!/bin/bash
 
 STEPS=40
-N_DRONES=5
-DRONE_SIZE=1
+N_DRONES=10
+DRONE_SIZE=4
 COLLISIONS=40
 
 mkdir -p data

@@ -1,135 +1,146 @@
-#include "../include/simulation.h"
+#include "../includes/simulation.h"
 
-int main(int argc, char *argv[])
+extern pthread_mutex_t collision_mutex;
+extern pthread_cond_t collision_cond;
+
+/* drone process function */
+void drone_process(int drone_id)
 {
-  char buffer[256];
+    int fd;
+    SharedMemory *shm;
+    char str[200];
 
-  if (argc != 2)
-  {
-    snprintf(buffer, sizeof(buffer), "Usage: %s <drone_id>\n", argv[0]);
-    write(STDERR_FILENO, buffer, strlen(buffer));
-    exit(1);
-  }
+    snprintf(str, sizeof(str), "Drone %d process started (PID: %d)\n",
+             drone_id, getpid());
+    write(STDOUT_FILENO, str, strlen(str));
 
-  int drone_id = atoi(argv[1]);
-
-  /* opens shared memory area */
-  int shm_fd = shm_open("/drone_sim", O_RDWR, 0);
-  if (shm_fd == -1)
-  {
-    perror("drone: shm_open");
-    exit(1);
-  }
-
-  /* maps shm into address space */
-  SharedMemory *shared_mem = mmap(NULL, sizeof(SharedMemory),
-                                  PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-  if (shared_mem == MAP_FAILED)
-  {
-    perror("drone: mmap");
-    exit(2);
-  }
-
-  /* opens semaphores */
-  sem_t *step_sync_sem = sem_open("/step_sync", 0);
-  sem_t *shared_mem_mutex = sem_open("/shared_mutex", 0);
-  sem_t *drones_ready_sem = sem_open("/drones_ready", 0);
-
-  if (step_sync_sem == SEM_FAILED || shared_mem_mutex == SEM_FAILED ||
-      drones_ready_sem == SEM_FAILED)
-  {
-    perror("drone: sem_open");
-    exit(3);
-  }
-
-  char filename[256];
-  snprintf(filename, sizeof(filename), "data/drone%d_movement.csv", drone_id + 1);
-
-  FILE *movement_file = fopen(filename, "r");
-  Position movements[MAX_TIME_STEPS];
-  int loaded_steps = 0;
-
-  char line[512];
-  snprintf(buffer, sizeof(buffer), "Drone %d: Reading from %s\n", drone_id + 1, filename);
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-
-  while (fgets(line, sizeof(line), movement_file) && loaded_steps < MAX_TIME_STEPS)
-  {
-    line[strcspn(line, "\n")] = 0;
-    if (strlen(line) == 0)
-      continue;
-
-    float x, y, z;
-    int parsed = sscanf(line, "%f,%f,%f", &x, &y, &z);
-    if (parsed == 3)
+    /* open existing shared memory */
+    if ((fd = shm_open("/drone_sim", O_RDWR, 0)) == -1)
     {
-      movements[loaded_steps].x = x;
-      movements[loaded_steps].y = y;
-      movements[loaded_steps].z = z;
-      loaded_steps++;
+        perror("drone shm_open");
+        exit(1);
     }
-  }
 
-  fclose(movement_file);
-
-  if (loaded_steps == 0)
-  {
-    snprintf(buffer, sizeof(buffer),
-             "Drone %d: ERROR - No valid data found in %s\n", drone_id + 1, filename);
-    write(STDOUT_FILENO, buffer, strlen(buffer));
-    munmap(shared_mem, sizeof(SharedMemory));
-    close(shm_fd);
-    return 1;
-  }
-
-  snprintf(buffer, sizeof(buffer),
-           "Drone %d: Successfully loaded %d movement steps\n", drone_id + 1, loaded_steps);
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-
-  /* main execution loop */
-  for (int t = 0; t < loaded_steps && shared_mem->simulation_active; t++)
-  {
-    sem_wait(shared_mem_mutex);
-    if (t < MAX_TIME_STEPS && drone_id < MAX_DRONES)
+    if ((shm = (SharedMemory *)mmap(NULL, sizeof(SharedMemory),
+                                    PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED)
     {
-      shared_mem->drone_positions[drone_id][t] = movements[t];
+        perror("drone mmap");
+        exit(2);
     }
-    sem_post(shared_mem_mutex);
 
-    /* signals readiness */
-    sem_post(drones_ready_sem);
-
-    /* waits for permission to proceed */
-    sem_wait(step_sync_sem);
-
-    if (!shared_mem->simulation_active)
+    /* oen semaphores in child process */
+    if ((sem_step_ready = sem_open("/sem_step_ready", 0)) == SEM_FAILED)
     {
-      snprintf(buffer, sizeof(buffer),
-               "Drone %d: Simulation ended early at step %d\n", drone_id + 1, t);
-      write(STDOUT_FILENO, buffer, strlen(buffer));
-      break;
+        perror("drone sem_open step_ready");
+        exit(3);
     }
-  }
 
-  /* signals that this drone has finished */
-  sem_wait(shared_mem_mutex);
-  shared_mem->drones_finished++;
-  snprintf(buffer, sizeof(buffer),
-           "Drone %d: Finished simulation - %d/%d drones finished\n",
-           drone_id + 1, shared_mem->drones_finished, shared_mem->num_drones);
-  write(STDOUT_FILENO, buffer, strlen(buffer));
-  sem_post(shared_mem_mutex);
+    if ((sem_step_continue = sem_open("/sem_step_continue", 0)) == SEM_FAILED)
+    {
+        perror("drone sem_open step_continue");
+        exit(4);
+    }
 
-  /* continues signaling readiness until simulation ends */
-  while (shared_mem->simulation_active)
-  {
-    sem_post(drones_ready_sem);
-    sem_wait(step_sync_sem);
-  }
+    /* US364: main drone loop */
+    while (!shm->simulation_finished && shm->drones[drone_id].active)
+    {
+        if (shm->current_timestep >= shm->time_steps)
+        {
+            snprintf(str, sizeof(str),
+                     "Drone %d: trajectory completed at timestep %d\n",
+                     drone_id, shm->current_timestep);
+            write(STDOUT_FILENO, str, strlen(str));
+            break;
+        }
 
-  /* cleanup */
-  munmap(shared_mem, sizeof(SharedMemory));
-  close(shm_fd);
+        update_drone_position(drone_id, shm->current_timestep, shm);
+        Position *current_pos = &shm->drones[drone_id].current_pos;
 
-  return 0;
+        /* validate position */
+        if (!is_valid_position(*current_pos))
+        {
+            shm->drones[drone_id].active = 0;
+            snprintf(str, sizeof(str),
+                     "Drone %d: mission completed (invalid position reached)\n",
+                     drone_id);
+            write(STDOUT_FILENO, str, strlen(str));
+            break;
+        }
+
+        snprintf(str, sizeof(str),
+                 "Drone %d: timestep %d, position (%.1f, %.1f, %.1f)\n",
+                 drone_id, shm->current_timestep,
+                 current_pos->x, current_pos->y, current_pos->z);
+        write(STDOUT_FILENO, str, strlen(str));
+
+        /* signal ready for next timestep */
+        shm->step_ready[drone_id] = 1;
+        /* signal coordinator that this drone is ready */
+        sem_post(sem_step_ready);
+
+        /* block until coordinator signals continue */
+        sem_wait(sem_step_continue);
+
+        /* aknowledge by clearing ready flag */
+        shm->step_ready[drone_id] = 0;
+    }
+
+    shm->drones[drone_id].active = 0;
+
+    /* cleaning up !!*/
+    if (munmap(shm, sizeof(SharedMemory)) == -1)
+    {
+        perror("drone munmap");
+    }
+
+    if (close(fd) == -1)
+    {
+        perror("drone close");
+    }
+
+    snprintf(str, sizeof(str), "Drone %d process ending\n", drone_id);
+    write(STDOUT_FILENO, str, strlen(str));
+    exit(0);
+}
+
+void update_drone_position(int drone_id, int timestep, SharedMemory *shm)
+{
+    if (timestep < shm->time_steps)
+    {
+        shm->drones[drone_id].current_pos = shm->drones[drone_id].trajectory[timestep];
+        shm->drones[drone_id].bounding_box = calculate_bounding_box(
+            shm->drones[drone_id].current_pos,
+            shm->drone_size);
+    }
+    else
+    {
+        shm->drones[drone_id].active = 0;
+    }
+}
+
+DroneAABB calculate_bounding_box(Position pos, int drone_size)
+{
+    DroneAABB box;
+    float half_size = (float)drone_size / 2.0f;
+
+    box.minX = pos.x - half_size;
+    box.maxX = pos.x + half_size;
+    box.minY = pos.y - half_size;
+    box.maxY = pos.y + half_size;
+    box.minZ = pos.z - half_size;
+    box.maxZ = pos.z + half_size;
+
+    return box;
+}
+
+int check_aabb_collision(DroneAABB box1, DroneAABB box2)
+{
+    return (box1.minX <= box2.maxX && box1.maxX >= box2.minX &&
+            box1.minY <= box2.maxY && box1.maxY >= box2.minY &&
+            box1.minZ <= box2.maxZ && box1.maxZ >= box2.minZ);
+}
+
+int is_valid_position(Position pos)
+{
+    return !(pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f);
 }
