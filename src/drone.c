@@ -3,12 +3,19 @@
 extern pthread_mutex_t collision_mutex;
 extern pthread_cond_t collision_cond;
 
-/* drone process function */
+/* drone process function - modified to use time-indexed positions */
 void drone_process(int drone_id)
 {
     int fd;
     SharedMemory *shm;
     char str[200];
+
+    if (drone_id < 0 || drone_id >= MAX_DRONES)
+    {
+        snprintf(str, sizeof(str), "Warning: Invalid drone ID %d\n", drone_id);
+        write(STDOUT_FILENO, str, strlen(str));
+        exit(1);
+    }
 
     snprintf(str, sizeof(str), "Drone %d process started (PID: %d)\n",
              drone_id, getpid());
@@ -28,7 +35,7 @@ void drone_process(int drone_id)
         exit(2);
     }
 
-    /* oen semaphores in child process */
+    /* open semaphores in child process */
     if ((sem_step_ready = sem_open("/sem_step_ready", 0)) == SEM_FAILED)
     {
         perror("drone sem_open step_ready");
@@ -41,9 +48,18 @@ void drone_process(int drone_id)
         exit(4);
     }
 
-    /* US364: main drone loop */
+    /* US364: */
     while (!shm->simulation_finished && shm->drones[drone_id].active)
     {
+        if (shm->current_timestep < 0 || shm->current_timestep >= MAX_TIMESTEPS)
+        {
+            snprintf(str, sizeof(str),
+                     "Drone %d: invalid timestep %d\n",
+                     drone_id, shm->current_timestep);
+            write(STDOUT_FILENO, str, strlen(str));
+            break;
+        }
+
         if (shm->current_timestep >= shm->time_steps)
         {
             snprintf(str, sizeof(str),
@@ -53,7 +69,8 @@ void drone_process(int drone_id)
             break;
         }
 
-        update_drone_position(drone_id, shm->current_timestep, shm);
+        update_drone_position_from_time_index(drone_id, shm->current_timestep, shm);
+
         Position *current_pos = &shm->drones[drone_id].current_pos;
 
         /* validate position */
@@ -75,19 +92,20 @@ void drone_process(int drone_id)
 
         /* signal ready for next timestep */
         shm->step_ready[drone_id] = 1;
+
         /* signal coordinator that this drone is ready */
         sem_post(sem_step_ready);
 
         /* block until coordinator signals continue */
         sem_wait(sem_step_continue);
 
-        /* aknowledge by clearing ready flag */
+        /* acknowledge by clearing ready flag */
         shm->step_ready[drone_id] = 0;
     }
 
     shm->drones[drone_id].active = 0;
 
-    /* cleaning up !!*/
+    /* cleaning up */
     if (munmap(shm, sizeof(SharedMemory)) == -1)
     {
         perror("drone munmap");
@@ -103,19 +121,40 @@ void drone_process(int drone_id)
     exit(0);
 }
 
-void update_drone_position(int drone_id, int timestep, SharedMemory *shm)
+void update_drone_position_from_time_index(int drone_id, int timestep, SharedMemory *shm)
 {
-    if (timestep < shm->time_steps)
+    if (timestep < shm->time_steps &&
+        shm->time_indexed_states[timestep][drone_id].is_valid)
     {
-        shm->drones[drone_id].current_pos = shm->drones[drone_id].trajectory[timestep];
-        shm->drones[drone_id].bounding_box = calculate_bounding_box(
-            shm->drones[drone_id].current_pos,
-            shm->drone_size);
+        shm->drones[drone_id].current_pos =
+            shm->time_indexed_states[timestep][drone_id].position;
+        shm->drones[drone_id].bounding_box =
+            shm->time_indexed_states[timestep][drone_id].bounding_box;
     }
     else
     {
+        /* drone inactive if no valid position */
         shm->drones[drone_id].active = 0;
     }
+}
+
+int check_collision_in_time_matrix(int drone1_id, int drone2_id, int timestep, SharedMemory *shm)
+{
+    char str[300];
+    if (timestep < 0 || timestep >= MAX_TIMESTEPS)
+    {
+        snprintf(str, sizeof(str), "Warning: Invalid timestep %d\n", timestep);
+        write(STDOUT_FILENO, str, strlen(str));
+        return 0;
+    }
+    if (drone1_id >= shm->num_drones || drone2_id >= shm->num_drones)
+    {
+        snprintf(str, sizeof(str), "Warning: Invalid drone %d\n", drone1_id);
+        write(STDOUT_FILENO, str, strlen(str));
+        return 0;
+    }
+
+    return shm->collision_matrix[timestep][drone1_id][drone2_id].detected;
 }
 
 DroneAABB calculate_bounding_box(Position pos, int drone_size)

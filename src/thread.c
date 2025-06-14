@@ -5,14 +5,14 @@ extern pthread_cond_t collision_cond;
 extern pthread_mutex_t step_mutex;
 extern pthread_cond_t step_cond;
 
-/* US362 & US363: collision detection  */
+/* US362 & US363: */
 void *collision_detection_thread(void *arg)
 {
     SharedMemory *shm = (SharedMemory *)arg;
     int i, j;
     char str[200];
 
-    snprintf(str, sizeof(str), "collision detection thread started (ID: %u)\n",
+    snprintf(str, sizeof(str), "Collision detection thread started (ID: %u)\n",
              (unsigned int)pthread_self());
     write(STDOUT_FILENO, str, strlen(str));
 
@@ -29,61 +29,80 @@ void *collision_detection_thread(void *arg)
             pthread_mutex_unlock(&step_mutex);
             break;
         }
-
         pthread_mutex_unlock(&step_mutex);
 
-        for (i = 0; i < shm->num_drones - 1; i++)
+        int current_step = shm->current_timestep;
+
+        /* bounds checking */
+        if (current_step < 0 || current_step >= MAX_TIMESTEPS)
         {
-            if (!shm->drones[i].active)
-                continue;
+            printf("Warning: Invalid timestep %d\n", current_step);
+            pthread_mutex_lock(&step_mutex);
+            shm->collision_detection_complete = 1;
+            pthread_cond_signal(&step_cond);
+            pthread_mutex_unlock(&step_mutex);
+            continue;
+        }
 
-            for (j = i + 1; j < shm->num_drones; j++)
+        if (current_step < shm->time_steps)
+        {
+            /* check time-indexed collision matrix for current timestep */
+            for (i = 0; i < shm->num_drones - 1; i++)
             {
-                if (!shm->drones[j].active)
+                if (!shm->time_indexed_states[current_step][i].is_valid)
                     continue;
 
-                if (shm->collision_detected_this_timestep[i][j] == 1)
+                for (j = i + 1; j < shm->num_drones; j++)
                 {
-                    continue;
-                }
+                    if (j < 0 || j >= MAX_DRONES)
+                        continue;
 
-                if (check_aabb_collision(shm->drones[i].bounding_box,
-                                         shm->drones[j].bounding_box))
-                {
-                    shm->collision_detected_this_timestep[i][j] = 1;
-                    shm->collision_detected_this_timestep[j][i] = 1;
+                    if (!shm->time_indexed_states[current_step][j].is_valid)
+                        continue;
 
-                    if (shm->collision_count < MAX_COLLISIONS)
+                    if (shm->collision_matrix[current_step][i][j].detected &&
+                        shm->collision_matrix[current_step][i][j].timestep_first_detected == current_step)
                     {
-                        CollisionEvent *collision = &shm->collisions[shm->collision_count];
-                        collision->timestep = shm->current_timestep;
-                        collision->drone1_id = i;
-                        collision->drone2_id = j;
-                        collision->pos1 = shm->drones[i].current_pos;
-                        collision->pos2 = shm->drones[j].current_pos;
-                        collision->box1 = shm->drones[i].bounding_box;
-                        collision->box2 = shm->drones[j].bounding_box;
-                        shm->collision_count++;
 
-                        snprintf(str, sizeof(str),
-                                 "COLLISION DETECTED! Drones %d and %d at timestep %d\n"
-                                 " Drone %d: pos(%.1f,%.1f,%.1f) box[%.1f-%.1f,%.1f-%.1f,%.1f-%.1f]\n"
-                                 " Drone %d: pos(%.1f,%.1f,%.1f) box[%.1f-%.1f,%.1f-%.1f,%.1f-%.1f]\n",
-                                 i, j, shm->current_timestep,
-                                 i, collision->pos1.x, collision->pos1.y, collision->pos1.z,
-                                 collision->box1.minX, collision->box1.maxX,
-                                 collision->box1.minY, collision->box1.maxY,
-                                 collision->box1.minZ, collision->box1.maxZ,
-                                 j, collision->pos2.x, collision->pos2.y, collision->pos2.z,
-                                 collision->box2.minX, collision->box2.maxX,
-                                 collision->box2.minY, collision->box2.maxY,
-                                 collision->box2.minZ, collision->box2.maxZ);
-                        write(STDOUT_FILENO, str, strlen(str));
+                        if (shm->collision_detected_this_timestep[i][j] == 0)
+                        {
+                            shm->collision_detected_this_timestep[i][j] = 1;
+                            shm->collision_detected_this_timestep[j][i] = 1;
 
-                        pthread_mutex_lock(&collision_mutex);
-                        shm->collision_detected = 1;
-                        pthread_cond_signal(&collision_cond);
-                        pthread_mutex_unlock(&collision_mutex);
+                            if (shm->collision_count >= MAX_COLLISIONS)
+                            {
+                                snprintf(str, sizeof(str), "Warning: Maximum collision count reached\n");
+                                write(STDOUT_FILENO, str, strlen(str));
+                                break;
+                            }
+
+                            if (shm->collision_count < MAX_COLLISIONS)
+                            {
+                                CollisionEvent *collision = &shm->collisions[shm->collision_count];
+                                *collision = shm->collision_matrix[current_step][i][j].event_data;
+                                shm->collision_count++;
+
+                                snprintf(str, sizeof(str),
+                                         "COLLISION CONFIRMED! Drones %d and %d at timestep %d\n"
+                                         " Drone %d: pos(%.1f,%.1f,%.1f) box[%.1f-%.1f,%.1f-%.1f,%.1f-%.1f]\n"
+                                         " Drone %d: pos(%.1f,%.1f,%.1f) box[%.1f-%.1f,%.1f-%.1f,%.1f-%.1f]\n",
+                                         i, j, current_step,
+                                         i, collision->pos1.x, collision->pos1.y, collision->pos1.z,
+                                         collision->box1.minX, collision->box1.maxX,
+                                         collision->box1.minY, collision->box1.maxY,
+                                         collision->box1.minZ, collision->box1.maxZ,
+                                         j, collision->pos2.x, collision->pos2.y, collision->pos2.z,
+                                         collision->box2.minX, collision->box2.maxX,
+                                         collision->box2.minY, collision->box2.maxY,
+                                         collision->box2.minZ, collision->box2.maxZ);
+                                write(STDOUT_FILENO, str, strlen(str));
+
+                                pthread_mutex_lock(&collision_mutex);
+                                shm->collision_detected = 1;
+                                pthread_cond_signal(&collision_cond);
+                                pthread_mutex_unlock(&collision_mutex);
+                            }
+                        }
                     }
                 }
             }
@@ -95,7 +114,7 @@ void *collision_detection_thread(void *arg)
         pthread_mutex_unlock(&step_mutex);
     }
 
-    snprintf(str, sizeof(str), "collision detection thread ending\n");
+    snprintf(str, sizeof(str), "time-indexed collision detection thread ending\n");
     write(STDOUT_FILENO, str, strlen(str));
     pthread_exit(NULL);
 }
@@ -112,7 +131,7 @@ void *report_generation_thread(void *arg)
 
     while (!shm->simulation_finished)
     {
-        /* US363: Wait for collision notification*/
+        /* US363: wait for collision notification*/
         pthread_mutex_lock(&collision_mutex);
         while (!shm->collision_detected && !shm->simulation_finished)
         {
@@ -127,10 +146,19 @@ void *report_generation_thread(void *arg)
 
         if (shm->collision_detected)
         {
-            snprintf(str, sizeof(str),
-                     "Report thread: Processing collision event (total: %d/%d)\n",
-                     shm->collision_count, shm->max_collisions);
-            write(STDOUT_FILENO, str, strlen(str));
+
+            if (shm->collision_count < 0 || shm->collision_count > MAX_COLLISIONS)
+            {
+                snprintf(str, sizeof(str), "Warning: Invalid collision count %d\n", shm->collision_count);
+                write(STDOUT_FILENO, str, strlen(str));
+            }
+            else
+            {
+                snprintf(str, sizeof(str),
+                         "Report thread: Processing collision event (total: %d/%d)\n",
+                         shm->collision_count, shm->max_collisions);
+                write(STDOUT_FILENO, str, strlen(str));
+            }
 
             if (shm->collision_count >= shm->max_collisions)
             {
@@ -145,7 +173,7 @@ void *report_generation_thread(void *arg)
         pthread_mutex_unlock(&collision_mutex);
     }
 
-    /* US365: Generate final report when simulation ends */
+    /* US365: generate final report when simulation ends */
     generate_final_report(shm);
     shm->report_ready = 1;
 
@@ -168,8 +196,7 @@ void generate_final_report(SharedMemory *shm)
         return;
     }
 
-    fprintf(report_file, "DRONE SIMULATION REPORT\n");
-
+    fprintf(report_file, "DRONE SIMULATION REPORT (TIME-INDEXED)\n");
     fprintf(report_file, "SIMULATION CONFIGURATION:\n");
     fprintf(report_file, "- Total drones: %d\n", shm->num_drones);
     fprintf(report_file, "- Drone size (collision box): %d units\n", shm->drone_size);
@@ -188,13 +215,18 @@ void generate_final_report(SharedMemory *shm)
     fprintf(report_file, "INDIVIDUAL DRONE STATUS:\n");
     for (i = 0; i < shm->num_drones; i++)
     {
+        if (i < 0 || i >= MAX_DRONES)
+        {
+            fprintf(report_file, "Warning: Invalid drone index %d\n", i);
+            continue;
+        }
+
         Position *pos = &shm->drones[i].current_pos;
-        // DroneAABB *box = &shm->drones[i].bounding_box;
         fprintf(report_file, "Drone %d: \n", i + 1);
         fprintf(report_file, " Position: (%.1f, %.1f, %.1f)\n",
                 pos->x, pos->y, pos->z);
-        // fprintf(report_file, " Bounding Box: X[%.1f-%.1f] Y[%.1f-%.1f] Z[%.1f-%.1f]\n", box->minX, box->maxX, box->minY, box->maxY, box->minZ, box->maxZ);
     }
+
     fprintf(report_file, "\n");
     fprintf(report_file, "COLLISION ANALYSIS:\n");
     fprintf(report_file, "- Total collisions detected: %d\n", shm->collision_count);

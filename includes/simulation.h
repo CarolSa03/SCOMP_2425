@@ -12,6 +12,8 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <time.h>
+#include <math.h>
+#include <signal.h>
 
 #define MAX_DRONES 50
 #define MAX_TIMESTEPS 100
@@ -56,8 +58,24 @@ typedef struct
 
 typedef struct
 {
+    Position position;
+    DroneAABB bounding_box;
+    int is_valid;
+} TimeIndexedDroneState;
+
+typedef struct
+{
+    int detected;
+    int timestep_first_detected;
+    CollisionEvent event_data;
+} CollisionPairState;
+
+typedef struct
+{
     Drone drones[MAX_DRONES];
     CollisionEvent collisions[MAX_COLLISIONS];
+    TimeIndexedDroneState time_indexed_states[MAX_TIMESTEPS][MAX_DRONES];
+    CollisionPairState collision_matrix[MAX_TIMESTEPS][MAX_DRONES][MAX_DRONES];
 
     int num_drones;
     int drone_size;
@@ -78,6 +96,9 @@ typedef struct
     int active_drone_count;
     double simulation_start_time;
     double simulation_end_time;
+
+    int time_indexed_collision_detection_complete;
+    int pre_calculation_complete;
 } SharedMemory;
 
 extern sem_t *sem_step_ready;
@@ -101,5 +122,10 @@ void cleanup_resources(void);
 
 void print_simulation_status(SharedMemory *shm);
 double get_current_time(void);
+
+void pre_calculate_all_positions(SharedMemory *shm);
+void perform_time_indexed_collision_detection(SharedMemory *shm);
+void update_drone_position_from_time_index(int drone_id, int timestep, SharedMemory *shm);
+int check_collision_in_time_matrix(int drone1_id, int drone2_id, int timestep, SharedMemory *shm);
 
 #endif
