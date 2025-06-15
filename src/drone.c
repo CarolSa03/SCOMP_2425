@@ -69,7 +69,7 @@ void drone_process(int drone_id)
             break;
         }
 
-        update_drone_position_from_time_index(drone_id, shm->current_timestep, shm);
+        update_position(drone_id, shm->current_timestep, shm);
 
         Position *current_pos = &shm->drones[drone_id].current_pos;
 
@@ -121,7 +121,7 @@ void drone_process(int drone_id)
     exit(0);
 }
 
-void update_drone_position_from_time_index(int drone_id, int timestep, SharedMemory *shm)
+void update_position(int drone_id, int timestep, SharedMemory *shm)
 {
     if (timestep < shm->time_steps &&
         shm->time_indexed_states[timestep][drone_id].is_valid)
@@ -138,7 +138,7 @@ void update_drone_position_from_time_index(int drone_id, int timestep, SharedMem
     }
 }
 
-int check_collision_in_time_matrix(int drone1_id, int drone2_id, int timestep, SharedMemory *shm)
+int check_collision(int drone1_id, int drone2_id, int timestep, SharedMemory *shm)
 {
     char str[300];
     if (timestep < 0 || timestep >= MAX_TIMESTEPS)
@@ -157,7 +157,7 @@ int check_collision_in_time_matrix(int drone1_id, int drone2_id, int timestep, S
     return shm->collision_matrix[timestep][drone1_id][drone2_id].detected;
 }
 
-DroneAABB calculate_bounding_box(Position pos, int drone_size)
+DroneAABB drone_bounding(Position pos, int drone_size)
 {
     DroneAABB box;
     float half_size = (float)drone_size / 2.0f;
@@ -172,7 +172,7 @@ DroneAABB calculate_bounding_box(Position pos, int drone_size)
     return box;
 }
 
-int check_aabb_collision(DroneAABB box1, DroneAABB box2)
+int intersect(DroneAABB box1, DroneAABB box2)
 {
     return (box1.minX <= box2.maxX && box1.maxX >= box2.minX &&
             box1.minY <= box2.maxY && box1.maxY >= box2.minY &&

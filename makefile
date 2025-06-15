@@ -28,4 +28,4 @@ clean:
 	rm -f $(OBJS) $(TARGET) simulation_report.txt
 	rm -f /dev/shm/drone_sim /dev/shm/sem_step /dev/shm/sem_collision /dev/shm/sem.sem_step_ready /dev/shm/sem.sem_step_continue
 
-.PHONY: all clean clean-all run test-many test-few
+.PHONY: all clean clean-all 

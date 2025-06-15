@@ -83,7 +83,7 @@ int main()
         exit(5);
     }
 
-    initialize_simulation(shm);
+    initialise_simulation(shm);
 
     snprintf(str, sizeof(str), "Simulation configured:\n");
     write(STDOUT_FILENO, str, strlen(str));
@@ -102,8 +102,8 @@ int main()
 
     snprintf(str, sizeof(str), "Pre-calculating all drone positions and collision matrix...\n");
     write(STDOUT_FILENO, str, strlen(str));
-    pre_calculate_all_positions(shm);
-    perform_time_indexed_collision_detection(shm);
+    pre_calculate_positions(shm);
+    collision_detection(shm);
     snprintf(str, sizeof(str), "Pre-calculation complete. Collision matrix ready.\n");
     write(STDOUT_FILENO, str, strlen(str));
 
@@ -320,7 +320,7 @@ int main()
     return 0;
 }
 
-void pre_calculate_all_positions(SharedMemory *shm)
+void pre_calculate_positions(SharedMemory *shm)
 {
     int drone_id, timestep;
     char str[200];
@@ -337,8 +337,8 @@ void pre_calculate_all_positions(SharedMemory *shm)
                 shm->time_indexed_states[timestep][drone_id].position =
                     shm->drones[drone_id].trajectory[timestep];
                 shm->time_indexed_states[timestep][drone_id].bounding_box =
-                    calculate_bounding_box(shm->drones[drone_id].trajectory[timestep],
-                                           shm->drone_size);
+                    drone_bounding(shm->drones[drone_id].trajectory[timestep],
+                                   shm->drone_size);
                 shm->time_indexed_states[timestep][drone_id].is_valid = 1;
             }
             else
@@ -354,7 +354,7 @@ void pre_calculate_all_positions(SharedMemory *shm)
     write(STDOUT_FILENO, str, strlen(str));
 }
 
-void perform_time_indexed_collision_detection(SharedMemory *shm)
+void collision_detection(SharedMemory *shm)
 {
     int timestep, i, j;
     char str[500];
@@ -404,7 +404,7 @@ void perform_time_indexed_collision_detection(SharedMemory *shm)
                     continue;
 
                 /* perform AABB collision check */
-                if (check_aabb_collision(
+                if (intersect(
                         shm->time_indexed_states[timestep][i].bounding_box,
                         shm->time_indexed_states[timestep][j].bounding_box))
                 {
@@ -549,7 +549,7 @@ void load_drone_trajectory(int drone_id, SharedMemory *shm)
     }
 }
 
-void initialize_simulation(SharedMemory *shm)
+void initialise_simulation(SharedMemory *shm)
 {
     load_config(shm);
 
@@ -582,7 +582,7 @@ void initialize_simulation(SharedMemory *shm)
         shm->step_ready[i] = 0;
         load_drone_trajectory(i, shm);
         shm->drones[i].current_pos = shm->drones[i].trajectory[0];
-        shm->drones[i].bounding_box = calculate_bounding_box(
+        shm->drones[i].bounding_box = drone_bounding(
             shm->drones[i].current_pos, shm->drone_size);
     }
 }

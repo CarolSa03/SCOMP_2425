@@ -106,10 +106,10 @@ extern sem_t *sem_step_continue;
 
 void load_config(SharedMemory *shm);
 void load_drone_trajectory(int drone_id, SharedMemory *shm);
-void initialize_simulation(SharedMemory *shm);
+void initialise_simulation(SharedMemory *shm);
 
-DroneAABB calculate_bounding_box(Position pos, int drone_size);
-int check_aabb_collision(DroneAABB box1, DroneAABB box2);
+DroneAABB drone_bounding(Position pos, int drone_size);
+int intersect(DroneAABB box1, DroneAABB box2);
 int is_valid_position(Position pos);
 
 void drone_process(int drone_id);
@@ -123,9 +123,9 @@ void cleanup_resources(void);
 void print_simulation_status(SharedMemory *shm);
 double get_current_time(void);
 
-void pre_calculate_all_positions(SharedMemory *shm);
-void perform_time_indexed_collision_detection(SharedMemory *shm);
-void update_drone_position_from_time_index(int drone_id, int timestep, SharedMemory *shm);
-int check_collision_in_time_matrix(int drone1_id, int drone2_id, int timestep, SharedMemory *shm);
+void pre_calculate_positions(SharedMemory *shm);
+void collision_detection(SharedMemory *shm);
+void update_position(int drone_id, int timestep, SharedMemory *shm);
+int check_collision(int drone1_id, int drone2_id, int timestep, SharedMemory *shm);
 
 #endif
