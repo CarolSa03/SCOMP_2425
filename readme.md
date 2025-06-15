@@ -315,8 +315,8 @@ chmod +x script clean
 
 | Group Member    | Contribution   |
 |-----------------|----------------|
-| Carolina de Sá  | %              |
-| Diogo Correia   | %              |
-| Nilsa Gil       | %              |
+| Carolina de Sá  | 50%            |
+| Diogo Correia   | 25%            |
+| Nilsa Gil       | 25%            |
 
 
