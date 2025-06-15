@@ -13,17 +13,7 @@ make
 
 This command will compile all necessary source files and create the executable.
 
-### 2. Run the Main Simulation
-
-Execute the drone simulation:
-
-```bash
-./drone
-```
-
-This starts the main drone simulation program.
-
-### 3. Run Movement Script
+### 2. Run Movement Script
 
 To execute the movement script functionality:
 
@@ -32,6 +22,16 @@ To execute the movement script functionality:
 ```
 
 This script handles drone movement operations within the simulation.
+
+### 3. Run the Main Simulation
+
+Execute the drone simulation:
+
+```bash
+./drone
+```
+
+This starts the main drone simulation program.
 
 ### 4. Clean Up Resources
 
