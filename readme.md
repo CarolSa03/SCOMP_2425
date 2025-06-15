@@ -1,0 +1,322 @@
+# Sprint 3
+# Hybrid Drone Simulation with Shared Memory and Advanced Synchronization
+
+## How to run
+
+### 1. Build the Program
+
+Compile the drone simulation program:
+
+```bash
+make
+```
+
+This command will compile all necessary source files and create the executable.
+
+### 2. Run the Main Simulation
+
+Execute the drone simulation:
+
+```bash
+./drone
+```
+
+This starts the main drone simulation program.
+
+### 3. Run Movement Script
+
+To execute the movement script functionality:
+
+```bash
+./script
+```
+
+This script handles drone movement operations within the simulation.
+
+### 4. Clean Up Resources
+
+When finished, clean up shared memory and temporary files:
+
+```bash
+./clean
+```
+
+This removes simulation reports, shared memory segments, and semaphores.
+
+**Required Files:**
+- `data/info.csv` - Simulation configuration
+- `data/drone1_movement.csv` through `data/droneN_movement.csv` - Drone trajectories
+
+
+## Project Overview
+
+In this project, a drone simulation was developed using multiple threads and processes to handle parallel execution. Shared memory was used to allow data sharing between processes, while synchronization was handled through semaphores, mutexes, and condition variables. The simulation checks for collisions during drone movement and, at the end, produces a report with all relevant results.
+
+## Component Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              MAIN PROCESS (Parent)                              │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐  │
+│  │ Collision Detection │    │ Report Generation   │    │ Main Coordination   │  │
+│  │     Thread          │    │      Thread         │    │      Thread         │  │
+│  │                     │    │                     │    │                     │  │
+│  │ - Monitor collisions│    │ - Wait for signals  │    │ - Control timesteps │  │
+│  │ - Signal report     │    │ - Generate reports  │    │ - Coordinate drones │  │
+│  │   thread            │    │ - Write to file     │    │ - Cleanup resources │  │
+│  └─────────────────────┘    └─────────────────────┘    └─────────────────────┘  │
+│            │                          │                          │               │
+│            └──────────┬───────────────┘                          │               │
+│                       │                                          │               │
+│  ┌─────────────────────▼─────────────────────────────────────────▼─────────────┐ │
+│  │                    SHARED MEMORY SEGMENT                                    │ │
+│  │                         /drone_sim                                          │ │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐ │ │
+│  │  │ Drone States    │  │ Collision Matrix│  │ Synchronization Flags       │ │ │
+│  │  │ - Positions     │  │ - Time-indexed  │  │ - simulation_finished       │ │ │
+│  │  │ - Trajectories  │  │ - Collision     │  │ - timestep_ready_for_...    │ │ │
+│  │  │ - Bounding boxes│  │   events        │  │ - collision_detected        │ │ │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────────────┘ │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│            │                          │                          │               │
+│            │                          │                          │               │
+│  ┌─────────▼─────────┐      ┌─────────▼─────────┐      ┌─────────▼─────────┐     │
+│  │    SEMAPHORES     │      │      MUTEXES      │      │ CONDITION VARS    │     │
+│  │                   │      │                   │      │                   │     │
+│  │ /sem_step_ready   │      │ collision_mutex   │      │ collision_cond    │     │
+│  │ /sem_step_continue│      │ step_mutex        │      │ step_cond         │     │
+│  └───────────────────┘      └───────────────────┘      └───────────────────┘     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                       │                          │                          │
+                       ▼                          ▼                          ▼
+┌─────────────────────────┐  ┌─────────────────────────┐  ┌─────────────────────────┐
+│    DRONE PROCESS 0      │  │    DRONE PROCESS 1      │  │    DRONE PROCESS N      │
+│                         │  │                         │  │                         │
+│ ┌─────────────────────┐ │  │ ┌─────────────────────┐ │  │ ┌─────────────────────┐ │
+│ │ - Read trajectory   │ │  │ │ - Read trajectory   │ │  │ │ - Read trajectory   │ │
+│ │ - Update position   │ │  │ │ - Update position   │ │  │ │ - Update position   │ │
+│ │ - Signal readiness  │ │  │ │ - Signal readiness  │ │  │ │ - Signal readiness  │ │
+│ │ - Wait for continue │ │  │ │ - Wait for continue │ │  │ │ - Wait for continue │ │
+│ └─────────────────────┘ │  │ └─────────────────────┘ │  │ └─────────────────────┘ │
+└─────────────────────────┘  └─────────────────────────┘  └─────────────────────────┘
+           │                             │                             │
+           ▼                             ▼                             ▼
+┌─────────────────────────┐  ┌─────────────────────────┐  ┌─────────────────────────┐
+│     INPUT FILES         │  │    CONFIG FILES         │  │    OUTPUT FILES         │
+│                         │  │                         │  │                         │
+│ drone1_movement.csv     │  │ data/info.csv           │  │ simulation_report.txt   │
+│ drone2_movement.csv     │  │ - num_drones            │  │ - Drone statuses        │
+│ drone3_movement.csv     │  │ - drone_size            │  │ - Collision events      │
+│ ...                     │  │ - max_collisions        │  │ - Validation results    │
+│ droneN_movement.csv     │  │ - time_steps            │  │ - Performance metrics   │
+└─────────────────────────┘  └─────────────────────────┘  └─────────────────────────┘
+```
+
+## Drone Movement Script
+
+Each drone reads its trajectory from a CSV file.
+Below is an example of a file for one drone, named drone1_movement.csv:
+
+```csv
+10.0,20.0,100.0
+12.5,22.0,102.0
+15.0,24.0,104.0
+(...)
+```
+
+**Format:** Each line represents the drone’s position at a specific timestep. The values are given in the format: `X,Y,Z`.
+
+- Each value corresponds to a coordinate in the simulation space.
+- All values are expressed in simulation units.
+- Each line represents a single timestep.
+
+
+**Configuration File (`data/info.csv`):**
+
+```csv
+10,5,5,50
+```
+
+Format: `num_drones,drone_size,max_collisions,time_steps`
+
+- num_drones: total number of drones to simulate
+- drone_size: size used for collision detection
+- max_collisions: maximum allowed collisions before the simulation is considered failed
+- time_steps: total number of timesteps the simulation will execute
+
+## Implementation
+---
+### US361: Initialize Hybrid Simulation Environment with Shared Memory
+**Objective:** Set up a parent process with multiple threads, and create child processes for the drones, all communicating through shared memory.
+
+**Implementation Approach:**
+- **Shared Memory Creation:** The function `shm_open()` was used with `O_CREAT | O_EXCL` to create a new shared memory segment named `/drone_sim`.
+- **Memory Structure:** A structured block (`SharedMemory`) was defined to hold:
+    - The states and trajectories of all drones,
+    - A matrix for tracking collisions based on time,
+    - Flags and counters to handle synchronization across processes and threads.
+- **Process Architecture:** The parent process launches all the drone processes using `fork()`, and also creates dedicated threads for coordination.
+- **Error Handling:** Error messages are printed using `perror()`, and the program exits with distinct codes, following the conventions used in class.
+- **Resource Management:** Signal handlers were added to manage `SIGINT` and `SIGTERM`, ensuring that shared memory and semaphores are released properly at the end.
+
+**Key Features:**
+- Positions are pre-calculated and stored by timestep to improve performance.
+- All array accesses and initial values are validated to avoid undefined behavior.
+- Initialization steps use atomic operations to avoid race conditions between threads.
+
+--- 
+### US362: Implement Function-Specific Threads in Parent Process
+
+**Objective:** Separate collision detection and report generation into specific threads with clear responsibilities.
+
+**Implementation Approach:**
+
+- **Thread Separation:** Two threads were created, each handling a separate task:
+    - `collision_detection_thread()`: Reads shared memory to check for position conflicts between drones.
+    - `report_generation_thread()`: Collects results from the simulation and prepares the final report.
+
+- **Thread Safety:** Mutexes such as `collision_mutex` and `step_mutex` were used to protect shared resources and avoid conflicts between threads.
+
+- **Bounds Validation:** All accesses involving timesteps, drone IDs, and arrays were checked to prevent invalid operations.
+
+- **Performance Optimization:** A time-indexed collision matrix was pre-calculated to allow quick collision checks with direct access to the data.
+
+**Key Features:**
+- Collision detection works without blocking the rest of the system and uses a fast scanning method.
+- Collisions are handled and logged as they happen during the simulation.
+- Terminal output is done safely using the `snprintf + write` pattern to avoid mixing messages from different threads.
+
+---
+
+### US363: Notify Report Thread via Condition Variables
+
+**Objective:** Use condition variables to notify the report thread whenever a collision is detected.
+
+**Implementation Approach:**
+- **Condition Variable Pattern:** Condition variables were used correctly along with mutexes to control access and ensure proper synchronization.
+- **Event Signaling:** The collision detection thread signals the report thread using `pthread_cond_signal(&collision_cond)` whenever a collision occurs.
+- **Wait Mechanism:** The report thread waits for a signal using `pthread_cond_wait(&collision_cond, &collision_mutex)`, staying blocked until notified.
+- **Condition Check Loop:** A `while` loop was used around the condition wait to make sure the thread only continues when the condition is really met.
+- **Real-time Processing:** Collision events are handled right after they are detected, without delays.
+
+**Key Features:**
+- Safe and immediate collision notification between threads.
+- All collision data is recorded with details like positions and bounding boxes.
+- Condition variables help maintain proper coordination between threads during the simulation.
+
+---
+
+### US364: Enforce Step-by-Step Simulation Synchronization
+**Objective:** Synchronize simulation progression using semaphores for lockstep execution.
+**Implementation Approach:**
+- **Semaphore Structure:** Two named semaphores were used to coordinate each step of the simulation:
+    - `/sem_step_ready`: Drones use this to signal when they finish processing a timestep.
+    - `/sem_step_continue`: The parent process uses this to tell drones they can proceed to the next step.
+- **Lockstep Protocol:**
+    1. Each active drone signals it is ready using `sem_post(sem_step_ready)`.
+    2. The parent process waits for all drones using `sem_wait(sem_step_ready)`.
+    3. Once all are ready, the parent runs the collision detection and handles coordination.
+    4. Then, the parent signals all drones to continue with `sem_post(sem_step_continue)`.
+    5. Each drone waits for that signal using `sem_wait(sem_step_continue)` before moving on.
+- **Dynamic Drone Management:** The number of active drones is tracked, and synchronization steps are adjusted accordingly if drones are added or removed.
+
+**Key Features:**
+- All processes stay perfectly synchronized at each timestep.
+- The number of active drones is monitored to manage resources more efficiently.
+- The simulation can end early if a predefined collision limit is reached.
+
+---
+### US365: Generate and Store Final Simulation Report
+
+**Objective:** Create a final simulation report that includes the status of each drone and a full analysis of collisions.
+
+**Implementation Approach:**
+- **Report Structure:** The report includes several sections:
+    - A summary of the simulation configuration
+    - The final status and last known position of each drone
+    - A list of all detected collisions, including timestamps and positions
+    - A result indicating whether the simulation passed or failed, based on the allowed number of collisions
+- **File I/O:** The report is written to `simulation_report.txt` using standard file operations with `fprintf()`.
+- **Data Aggregation:** All the required data is collected from the shared memory after the simulation ends.
+- **Performance Metrics:** The report also includes statistics such as the collision rate and total simulation time.
+
+**Key Features:**
+- The report is well-structured and organized into clear sections.
+- Each collision is documented with useful details for later review.
+- The final result includes a clear validation based on the collision threshold.
+
+---
+## Advanced Features Implemented
+
+### Time-Indexed Collision Detection
+- **Pre-calculation:** All drone positions and bounding boxes are calculated before the simulation starts.
+- **Matrix Storage:** A 3D matrix `[timestep][drone1][drone2]` is used to store collisions by timestep.
+- **Performance:** This avoids calculating collisions during runtime, allowing the simulation to run in real time without delays.
+
+### Thread-Safe Terminal Output
+- **Pattern Used:** Terminal output is handled using `snprintf()` combined with `write(STDOUT_FILENO, ...)` to ensure consistency.
+- **Why It’s Used:** This avoids overlapping or mixed messages when multiple threads or processes print to the terminal at the same time.
+- **Good Practices:** This approach follows the threading guidelines taught in SCOMP.
+
+### Comprehensive Error Handling
+- **Bounds Checking:** All array accesses and loops are checked to avoid invalid memory access.
+- **Sequential Error Codes:** Each error scenario has a specific exit code to help with debugging.
+- **Resource Cleanup:** Signal handlers and cleanup functions ensure that shared memory and semaphores are always released properly at the end.
+
+
+
+## Technical Specifications
+
+**Shared Memory:**
+- Segment Name: `/drone_sim`
+- Size: `sizeof(SharedMemory)` (approximately 50MB for maximum configuration)
+- Permissions: `S_IRUSR | S_IWUSR` (read/write for owner)
+
+**Semaphores:**
+- `/sem_step_ready`: Process coordination (initial value: 0)
+- `/sem_step_continue`: Process continuation (initial value: 0)
+
+**Threads:**
+- Collision Detection Thread: Real-time collision monitoring
+- Report Generation Thread: Event processing and report creation
+
+**Configuration Limits:**
+- Maximum Drones: 50
+- Maximum Timesteps: 100
+- Maximum Collisions: 100
+- Default Drone Size: 2 units
+
+## Troubleshooting
+
+### Common Issues
+
+**Build fails:** Ensure you have a properly configured development environment with make and necessary compilers installed.
+
+**Permission denied:** Make sure all scripts have executable permissions:
+```bash
+chmod +x script clean
+```
+
+**Shared memory errors:** Run the clean script if you encounter shared memory conflicts from previous runs.
+
+## Workflow Summary
+
+1. **Build**: `make`
+2. **Movement**: `./script`
+3. **Run**: `./drone`
+4. **Cleanup**: `./clean`
+
+**Output:**
+- `simulation_report.txt` - Contains all results from the simulation, including drone statuses and collision analysis.
+- Real-time terminal output with collision events and status updates
+
+## Group Self-Assessment
+
+| Group Member    | Contribution   |
+|-----------------|----------------|
+| Carolina de Sá  | %              |
+| Diogo Correia   | %              |
+| Nilsa Gil       | %              |
+
+
